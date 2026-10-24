@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<!--
+  Demonstrates:
+    * canvas basics
+    * simple animation
+    * data structures to drive a simple game
+    * tone generation
+    * simple physics (reflection off walls and spheres, repelling force, hit detection)
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NOISY APPLES</title>
+    <style>
+        body {
+            padding: 8px;
+            font-size: 20px;
+            font-family: arial, sans-serif;
+        }
+        canvas {
+            background-image: url('wood2.jpg');
+            background-repeat: repeat;
+            width: 100%;
+            height: calc(100vh - 16px - 40px);
+            border: solid 5px #885017;
+        }
+        .hints {
+            font-size: 16px;
+            color: #808080;
+        }
+        .tools {
+            float: right;
+        }
+    </style>
+    <script>
+    // FUN VARIABLES
+    const n_initial_bouncers = 50;
+    let recoil = 0.2;
+    let friction = 0.4;
+    let tone_mode = "linear";  // 'linear', 'melodic', 'd_major', 'd_minor', etc.
+    let default_wall_freqs = [350, 450, 300, 250];
+    let wall_freqs = [...default_wall_freqs];
+
+    ///// SOUND PLAYING FUNCTIONS
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function play(frequency, duration, type)
+    {
+        duration = duration || 0.25;
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        // 1. Set the initial volume to 0 (silence)
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        // 2. Attack: Ramp up to peak volume (0.5) over 0.1 seconds
+        gainNode.gain.linearRampToValueAtTime(0.8, audioCtx.currentTime + duration/5);
+        // 3. Decay: Fade down to a sustain level (0.2) over the next 0.2 seconds
+        gainNode.gain.linearRampToValueAtTime(0.0, audioCtx.currentTime + duration);
+        // Connect oscillator -> gain node -> speakers
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        // play
+        oscillator.type = type || 'sine'; // Waveform type: 'sine', 'square', 'sawtooth', 'triangle'
+        oscillator.frequency.setValueAtTime(frequency, audioCtx.currentTime); // Frequency in Hz (440 Hz = A4 / Middle A)
+        //oscillator.connect(audioCtx.destination);
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + duration); // Stops the note after 1 second
+    }
+    function play_song(song, durations, speed)
+    {
+        let note = song.shift();
+        if (! note)
+            return;
+        play(note, durations);
+        if (! song)
+            return;
+        setTimeout(function(){
+            play_song(song, durations, speed)
+        }, speed || 200);
+    }
+
+    ///// MATH, ETC.
+
+    function distance(x1, y1, x2, y2)
+    {
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        return Math.sqrt(dx*dx+dy*dy);
+    }
+    // 'c1' and 'c2' are [r, g, b, a], result is a CSS color satring: 'rgba(...)'
+    function random_color_between(c1, c2)
+    {
+        let q1 = Math.random();
+        let q2 = 1 - q1;
+        let r = q1*c1[0]+q2*c2[0];
+        let g = q1*c1[1]+q2*c2[1];
+        let b = q1*c1[2]+q2*c2[2];
+        let a = q1*c1[3]+q2*c2[3];
+        return `rgba(${r},${g},${b},${a})`;
+    }
+
+    /**
+     * Length of a vector.
+     */
+    function v_abs(v)
+    {
+        return Math.sqrt(v[0]*v[0] + v[1]*v[1]);
+    }
+
+    /**
+     * Makes a vector "1 long".
+     */
+    function normalize(v)
+    {
+        let d = v_abs(v);
+        return [v[0]/d, v[1]/d];
+    }
+
+    /**
+     * Compute bounces of spheres.
+     */
+    function bounce_velocity(mover, bouncer)
+    {
+        let v0 = [mover.vx, mover.vy];
+        let va = v_abs(v0);
+        let b2m = normalize([mover.x - bouncer.x, mover.y - bouncer.y]);
+        let nv0 = normalize(v0);
+        let ca = -(b2m[0]*nv0[0] + b2m[1]*nv0[1])
+        let boing = [b2m[0]*ca + nv0[0], b2m[1]*ca + nv0[1]];
+        let v1n = [-nv0[0] + 2*boing[0], -nv0[1] + 2*boing[1]];
+        return [va*v1n[0], va*v1n[1]];
+    }
+
+    /**
+     * Compute a force that pushes bouncers away from one another.
+     */
+    function repel(bouncer)
+    {
+        let dvx = 0, dvy = 0;
+        for (let b of bouncers)
+        {
+            if (b === bouncer)
+                continue;
+            let d = distance(bouncer.x, bouncer.y, b.x, b.y);
+            let rr = bouncer.r + b.r;
+            // overlapping?
+            if (d < rr)
+            {
+                let strength = rr - d;
+                let vr = normalize([bouncer.x - b.x, bouncer.y - b.y]);
+                dvx += vr[0] * strength;
+                dvy += vr[1] * strength;
+            }
+        }
+        return [dvx, dvy];
+    }
+
+    /**
+     * Random tone.
+     */
+    function notes_of_scale(scale, n_octaves)
+    {
+        let notes = [];
+        for (let octave=0; octave < n_octaves; octave++)
+            for (let note of scale)
+                notes.push(note + octave*12);
+        return notes;
+    }
+    const d_scale = notes_of_scale([2, 4, 6, 7, 9, 11, 13], 1);
+    const d_minor = notes_of_scale([2, 4, 5, 7, 9, 10, 12], 1);
+    //
+    function note_freq(note_no)
+    {
+        return 220 * Math.pow(2, note_no/12.0);
+    }
+    function random_tone()
+    {
+        if (tone_mode === "linear")
+            return 60 + Math.random()*640;
+        else if (tone_mode === "melodic")
+        {
+            // all 12 notes of 3 octaves
+            let note_no = Math.floor(Math.random()*24);
+            return note_freq(note_no);
+        }
+        else if (tone_mode === "d_major")
+        {
+            let note_no = Math.floor(Math.random()*d_scale.length);
+            return note_freq(d_scale[note_no]);
+        }
+        else if (tone_mode === "d_minor")
+        {
+            let note_no = Math.floor(Math.random()*d_minor.length);
+            return note_freq(d_scale[note_no]);
+        }
+    }
+
+    // GAME DATA
+
+    // - MOVING BALL  (note: position is changed by reset_bouncers())
+    let ball = {x: 200, y: 200, vx: 300, vy: 250, r:20, color: "blue"};
+
+    // - THINGS TO BOUNCE OFF
+    let bouncers = [];
+
+    // FUNCTIONS THAT CHANGE GAME DATA
+
+    function addBouncer()
+    {
+        const x = Math.random()*width;
+        const y = Math.random()*height;
+        const r = 10 + Math.random()*30;
+        const color = random_color_between([255,0,0,1], [128,128,0,1]);
+        const tone = random_tone();
+        if (distance(x, y, ball.x, ball.y) < r + ball.r + 10)
+            // don't spawn on top of the ball
+            return;
+        bouncers.push({
+            x: x,
+            y: y,
+            r: r,
+            vx: 0,
+            vy: 0,
+            color: color,
+            tone: tone
+        });
+    }
+
+    function set_n_bouncers(n)
+    {
+        if (n < 0 || n > 400)
+            return;
+        while (n >= 0 && bouncers.length > n)
+            bouncers.shift();
+        while (bouncers.length < n)
+            addBouncer();
+        document.getElementById("n_apples").value = bouncers.length;
+    }
+    function change_n_bouncers(change_by)
+    {
+        set_n_bouncers(bouncers.length + change_by);
+        draw();
+    }
+    function ball_speed(factor)
+    {
+        ball.vx *= factor;
+        ball.vy *= factor;
+    }
+
+    /**
+     * Reset the bouncers (without changing other settings).
+     * Also moves ball back to center.
+     */
+    function reset_bouncers()
+    {
+        ball.x = cx;
+        ball.y = cy;
+        set_n_bouncers(0);
+        set_n_bouncers(n_initial_bouncers);
+        draw();
+    }
+
+    /**
+     * Give all existing bouncers new tones.
+     */
+    function retune_bouncers()
+    {
+        for (let bouncer of bouncers)
+        {
+            bouncer.tone = random_tone();
+        }
+        // also return walls
+        if (tone_mode === "linear")
+            wall_freqs = [...default_wall_freqs];
+        else
+        {
+            wall_freqs = [random_tone(), random_tone(), random_tone(), random_tone()];
+        }
+    }
+
+    </script>
+</head>
+<body>
+NOISY APPLES
+<div class="tools">
+    # Apples:
+    <button onclick="change_n_bouncers(-5)">-</button>
+    <span id="n_apples">--</span>
+    <button onclick="change_n_bouncers(5)">+</button>
+    <button onclick="reset_bouncers()">reset</button>
+    &nbsp;
+    Tones:
+    <button onclick="tone_mode='linear'; retune_bouncers();">linear</button>
+    <button onclick="tone_mode='melodic'; retune_bouncers();">melodic</button>
+    <button onclick="tone_mode='d_major'; retune_bouncers();">D major</button>
+    <button onclick="tone_mode='d_minor'; retune_bouncers();">D minor</button>
+    &nbsp;
+    Ball speed:
+    <button onclick="ball_speed(0.8)">-</button>
+    <button onclick="ball_speed(1.2)">+</button>
+</div>
+<button onclick="start_game()">START</button>
+<canvas id="draw_here"></canvas>
+<script>
+    // This sets up a canvas for you that covers the page.
+    // - "g" is where you draw
+    // - "width" is the total width
+    // - "height" is the total height
+    // - "cx" and "cy" are the very middle of the page
+    let canvas = document.getElementById("draw_here");
+    let g = canvas.getContext("2d");
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+    let width = canvas.width;
+    let height = canvas.height;
+    let cx = width/2;
+    let cy = height/2;
+    let mouse_x = 0;
+    let mouse_y = 0;
+    let running = false;
+
+    function circle(x, y, r, color)
+    {
+        g.fillStyle = color;
+        g.beginPath();
+        g.ellipse(x, y, r, r, 0, 0, 6.283);
+        g.fill();
+    }
+    function line(x1, y1, x2, y2, thickness, color)
+    {
+        g.strokeStyle = color;
+        g.lineWidth = thickness;
+        g.beginPath();
+        g.moveTo(x1, y1);
+        g.lineTo(x2, y2);
+        g.stroke();
+    }
+
+    // CODE TO DRAW EACH FRAME OF THE ANIMATION
+    let t0 = new Date().getTime();
+    function draw()
+    {
+        // "t1" is the current time (in seconds since 1970)
+        // "dt" is how many seconds it has been since the last frame was drawn
+        let t1 = new Date().getTime();
+        let dt = Math.min((t1 - t0)/1000, 0.1);
+        t0 = t1;
+
+        // erase whole canvas to transparent
+        g.clearRect(0, 0, width, height);
+
+        // draw the ball
+        circle(ball.x, ball.y, ball.r, ball.color);
+
+        // move the ball
+        ball.x += ball.vx*dt;
+        ball.y += ball.vy*dt;
+
+        // bounce the ball off edges of screen
+        // - top
+        if (ball.y < 0)
+        {
+            ball.vy *= -1;
+            ball.y = 0;
+            play(wall_freqs[0]);
+        }
+        // - left
+        if (ball.x < 0)
+        {
+            ball.vx *= -1;
+            ball.x = 0
+            play(wall_freqs[1]);
+        }
+        // - bottom
+        if (ball.y > height)
+        {
+            ball.vy *= -1;
+            ball.y = height;
+            play(wall_freqs[2]);
+        }
+        // - right
+        if (ball.x > width)
+        {
+            ball.vx *= -1;
+            ball.x = width;
+            play(wall_freqs[3]);
+        }
+
+        // draw & move the bouncers
+        let v_decay = Math.pow(friction, dt);
+        for (let bouncer of bouncers)
+        {
+            // draw
+            circle(bouncer.x, bouncer.y, bouncer.r, bouncer.color);
+            // move
+            bouncer.x += bouncer.vx*dt;
+            bouncer.y += bouncer.vy*dt;
+            bouncer.vx *= v_decay;
+            bouncer.vy *= v_decay;
+            // bounce off walls
+            if (bouncer.x < 0)
+            {
+                bouncer.vx = -bouncer.vx;
+                bouncer.x = 0;
+            }
+            if (bouncer.y < 0)
+            {
+                bouncer.vy = -bouncer.vy;
+                bouncer.y = 0;
+            }
+            if (bouncer.x > width)
+            {
+                bouncer.vx = -bouncer.vx;
+                bouncer.x = width;
+            }
+            if (bouncer.y > height)
+            {
+                bouncer.vy = -bouncer.vy;
+                bouncer.y = height;
+            }
+            // keep bouncers from overlapping
+            let vr = repel(bouncer);
+            bouncer.vx += vr[0]*dt;
+            bouncer.vy += vr[1]*dt;
+        }
+
+        // bounce ball off bouncers
+        for (let bouncer of bouncers)
+        {
+            // find distance from ball to bouncer
+            let d = distance(ball.x, ball.y, bouncer.x, bouncer.y);
+            // find how close they can get before they touch (add the radiuses)
+            let bd=ball.r + bouncer.r;
+            // see if the distance is less than that
+            if (d < bd)
+            {
+                // don't get stuck: back-off to 'before hit'
+                ball.x -= ball.vx*dt;
+                ball.y -= ball.vy*dt;
+                // bounce accordingly
+                let v1 = bounce_velocity(ball, bouncer);
+                ball.vx = v1[0];
+                ball.vy = v1[1];
+                // impact on bouncers
+                bouncer.vx -= v1[0]*recoil;
+                bouncer.vy -= v1[1]*recoil;
+                // play a sound
+                play(bouncer.tone);
+            }
+        }
+    }
+
+    // add some bouncers
+    reset_bouncers();
+
+    function start_game()
+    {
+        if (! running)
+        {
+            // draw at 40fps
+            setInterval(draw, 1000 / 40);
+            running = true;
+        }
+
+        // introductory melody
+        play_song([400, 300, 400, 200], 0.125, 125);
+    }
+
+    ////// EVENT HANDLING (not used yet)
+    function handle_key_down(event)
+    {
+        if (event.code === "KeyA")
+        {
+        }
+    }
+    function handle_key_up(event)
+    {
+        if (event.code === "ShiftLeft")
+        {
+        }
+    }
+    function handle_mouse_move(event)
+    {
+        mouse_x = event.offsetX;
+        mouse_y = event.offsetY;
+    }
+    addEventListener("keydown", handle_key_down);
+    addEventListener("keyup", handle_key_up);
+    canvas.addEventListener("mousemove", handle_mouse_move)
+
+    // don't allow vertical scrolling
+    window.addEventListener('wheel', function(e) {
+      // Check if the vertical delta is non-zero
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+</script>
+</body>
+</html>

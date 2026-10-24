@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<!--
+  Demonstrates:
+    * canvas basics
+    * simple animation
+    * data structures to drive a simple game
+    * event handlers
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EAT 'EM</title>
+    <style>
+        body {
+            padding: 8px;
+            font-size: 20px;
+            font-family: arial;
+        }
+        canvas {
+            width: 100%;
+            height: calc(100vh - 16px - 40px);
+            border: solid 1px #c0c0c0;
+        }
+        .hints {
+            font-size: 16px;
+            color: #808080;
+        }
+    </style>
+</head>
+<body>
+<canvas id="draw_here"></canvas>
+<div class="hints">HINTS: WASD to move, left-shift to eat, M for more, R to restart, SPACE=move toward mouse</div>
+<script>
+
+    // This sets up a canvas for you that covers the page.
+    // - "g" is where you draw
+    // - "width" is the total width
+    // - "height" is the total height
+    // - "cx" and "cy" are the very middle of the page
+    let canvas = document.getElementById("draw_here");
+    let g = canvas.getContext("2d");
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+    let width = canvas.width;
+    let height = canvas.height;
+    let cx = width/2;
+    let cy = height/2;
+    let mouse_x = 0;
+    let mouse_y = 0;
+
+        // CONSTANTS
+    const move_speed = 10;
+    let target_color1 = [0,0,128,0.3];
+    let target_color2 = [0,128,128,0.3];
+    let target_hit_color = "rgba(128,128,128,0.1)";
+    let target_r = 20;
+    let target_ch = 35;
+    let target_wiggle = 4;
+
+    function circle(x, y, r, color)
+    {
+        g.fillStyle = color;
+        g.beginPath();
+        g.ellipse(x, y, r, r, 0, 0, 6.283);
+        g.fill();
+    }
+    function line(x1, y1, x2, y2, thickness, color)
+    {
+        g.strokeStyle = color;
+        g.lineWidth = thickness;
+        g.beginPath();
+        g.moveTo(x1, y1);
+        g.lineTo(x2, y2);
+        g.stroke();
+    }
+    function distance(x1, y1, x2, y2)
+    {
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        return Math.sqrt(dx*dx+dy*dy);
+    }
+    // 'c1' and 'c2' are [r, g, b, a], result is a CSS color satring: 'rgba(...)'
+    function random_color_between(c1, c2)
+    {
+        let q1 = Math.random();
+        let q2 = 1 - q1;
+        let r = q1*c1[0]+q2*c2[0];
+        let g = q1*c1[1]+q2*c2[1];
+        let b = q1*c1[2]+q2*c2[2];
+        let a = q1*c1[3]+q2*c2[3];
+        return `rgba(${r},${g},${b},${a})`;
+    }
+
+    // ANIMATION VARIABLES
+    // - as these change, things move!
+    let targets = [];
+
+    function add_targets(how_many)
+    {
+        for (let n=0; n < how_many; n++)
+        {
+            targets.push({x: cx, y: cy, color: random_color_between(target_color1, target_color2), hit: false});
+        }
+    }
+    add_targets(30);
+
+    let my_x = 100;
+    let my_y = 100;
+    let shift_pressed = false;
+
+    // CODE TO DRAW EACH FRAME OF THE ANIMATION
+    let t0 = new Date().getTime();
+    function draw()
+    {
+        // "t1" is the current time (in seconds since 1970)
+        // "dt" is how many seconds it has been since the last frame was drawn
+        let t1 = new Date().getTime();
+        let dt = t1 - t0;
+        t0 = t1;
+
+        // this erases the whole thing by filling from (0,0) to (width,height)
+        g.fillStyle = "lightgray";
+        g.fillRect(0, 0, width, height);
+
+        // targets
+        for (let target of targets)
+        {
+            let use_color = target.hit ? target_hit_color : target.color;
+            circle(target.x, target.y, target_r, use_color);
+            line(target.x-target_ch, target.y, target.x+target_ch, target.y, 3, use_color)
+            line(target.x, target.y-target_ch, target.x, target.y+target_ch, 3, use_color)
+        }
+
+        // count 'left to eat'
+        let left_to_eat = 0;
+        let n_eaten = 0;
+        for (let target of targets)
+        {
+            if (target.hit)
+                n_eaten ++;
+            else
+                left_to_eat ++;
+        }
+        g.fillStyle = "rgb(128,128,128,192)";
+        g.font = "20px Arial";
+        g.fillText("eaten: " + n_eaten + ", left to eat: " + left_to_eat, width-250, height-20);
+
+        // player
+        let player_r = 5 + n_eaten*0.3;
+        if (shift_pressed)
+            player_r *= 2;
+        circle(my_x, my_y, player_r, "red");
+
+        // eat
+        if (shift_pressed)
+        {
+            for (let target of targets)
+            {
+                let d = distance(my_x, my_y, target.x, target.y);
+                if (d < player_r)
+                {
+                    target.hit = true;
+                }
+            }
+
+        }
+
+        // move targets randomly for now
+        for (let target of targets)
+        {
+            if (target.hit)
+                continue;
+            target.x += Math.random()*target_wiggle*2 - target_wiggle;
+            target.y += Math.random()*target_wiggle*2 - target_wiggle;
+        }
+
+        // TODO detect game won
+    }
+
+    function handle_key_down(event)
+    {
+        if (event.code === "KeyA")
+        {
+            my_x -= move_speed;
+        }
+        if (event.code === "KeyD")
+        {
+            my_x += move_speed;
+        }
+        if (event.code === "KeyW")
+        {
+            my_y -= move_speed;
+        }
+        if (event.code === "KeyS")
+        {
+            my_y += move_speed;
+        }
+        if (event.code === "ShiftLeft")
+        {
+            shift_pressed = true;
+        }
+        if (event.code === "KeyM")
+        {
+            // add MORE
+            add_targets(5);
+        }
+        if (event.code === "KeyR")
+        {
+            // RESTART
+            targets = [];
+            add_targets(30);
+        }
+        if (event.code === "Space")
+        {
+            // move toward mouse
+            let dx = mouse_x - my_x;
+            let dy = mouse_y - my_y;
+            let d = Math.sqrt(dx*dx + dy*dy);
+            my_x += move_speed * dx/d;
+            my_y += move_speed * dy/d;
+        }
+    }
+
+    function handle_key_up(event)
+    {
+        if (event.code === "ShiftLeft")
+        {
+            shift_pressed = false;
+        }
+    }
+
+    function handle_mouse_move(event)
+    {
+        mouse_x = event.offsetX;
+        mouse_y = event.offsetY;
+    }
+
+    // draw at 40fps
+    setInterval(draw, 1000/40);
+    addEventListener("keydown", handle_key_down);
+    addEventListener("keyup", handle_key_up);
+    canvas.addEventListener("mousemove", handle_mouse_move)
+
+    // don't allow vertical scrolling
+    window.addEventListener('wheel', function(e) {
+      // Check if the vertical delta is non-zero
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+</script>
+</body>
+</html>
