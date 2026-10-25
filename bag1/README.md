@@ -1,4 +1,4 @@
-# BAG 1
+# PROJECT SET 1
 
 [Eat 'Em](eat_em.html) - something between pac man and ambient noise
 

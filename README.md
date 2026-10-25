@@ -18,4 +18,4 @@ The lessons recorded here are somewhat of a 'best of' collection, starting halfw
 course.  The full course would begin with creating a basic HTML page, styling it with CSS, adding
 simple scripts, really basic canvas usage and so on.
 
-[Projects](bag1)
+[Project Set One](bag1)

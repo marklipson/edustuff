@@ -46,6 +46,8 @@
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     function play(frequency, duration, type)
     {
+        //if (audioCtx.state !== 'running')
+        //    await audioCtx.resume();
         duration = duration || 0.25;
         const oscillator = audioCtx.createOscillator();
         const gainNode = audioCtx.createGain();
