@@ -17,3 +17,5 @@ more could be done toward that goal.
 The lessons recorded here are somewhat of a 'best of' collection, starting halfway through the
 course.  The full course would begin with creating a basic HTML page, styling it with CSS, adding
 simple scripts, really basic canvas usage and so on.
+
+[Projects](bag1)
